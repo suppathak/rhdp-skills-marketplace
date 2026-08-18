@@ -40,9 +40,17 @@ CLEAN_DIR = os.path.join(FIXTURES_DIR, "clean")
 BROKEN_DIR = os.path.join(FIXTURES_DIR, "broken")
 PROMPT_TEMPLATE_PATH = os.path.join(SCRIPT_DIR, "prompt_template.md")
 
-PROJECT_ID = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "itpc-gcp-octo-eng-claude")
-REGION = os.environ.get("CLOUD_ML_REGION", "global")
+PROJECT_ID = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "")
+REGION = os.environ.get("CLOUD_ML_REGION", "")
 MODEL = os.environ.get("EVAL_MODEL", "claude-sonnet-4-6")
+
+if not PROJECT_ID or not REGION:
+    sys.exit(
+        "ERROR: Set ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION.\n"
+        "Example:\n"
+        "  export ANTHROPIC_VERTEX_PROJECT_ID=my-gcp-project\n"
+        "  export CLOUD_ML_REGION=us-east5"
+    )
 
 
 def load_prompt_template() -> str:

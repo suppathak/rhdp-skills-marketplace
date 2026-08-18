@@ -66,8 +66,8 @@ python3 agnosticv/skills/validator/eval/score_eval_llm.py --json
 ```
 
 Environment variables:
-- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project (default: `itpc-gcp-octo-eng-claude`)
-- `CLOUD_ML_REGION` — GCP region (default: `global`)
+- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID
+- `CLOUD_ML_REGION` — GCP region
 - `EVAL_MODEL` — Claude model to use (default: `claude-sonnet-4-6`)
 
 ## Test fixtures (dataset)
