@@ -1,16 +1,22 @@
 # AgnosticV Validator — Eval Suite
 
-A regression test suite for the `agnosticv:validator` skill. It re-implements
-the skill's core validation checks as a standalone Python script and runs them
-against a curated set of YAML fixtures to catch regressions before they merge.
+A regression test suite for the `agnosticv:validator` skill. It provides two
+evaluation approaches: a fast deterministic Python checker and an LLM-based
+evaluator that invokes Claude via Vertex AI to run the actual validation rules.
 
 ## What this is
 
 The `agnosticv:validator` skill is a 2700-line Markdown prompt that validates
 RHDP catalog YAML configurations. It runs 27+ checks via 5 sub-agents. Every
 check is fully deterministic (regex, string matching, YAML parsing — no LLM
-reasoning), so we re-implemented 10 of the most impactful checks in plain
-Python. This gives us a fast, free, repeatable test harness.
+reasoning), so we provide two ways to test for regressions:
+
+1. **Python checker** (`agv_checker.py` + `score_eval.py`) — re-implements 10
+   of the most impactful checks in plain Python. Fast, free, repeatable.
+2. **LLM evaluator** (`score_eval_llm.py`) — sends each fixture's YAML to
+   Claude via Vertex AI along with the full validation rules, then compares
+   the LLM's structured JSON output against `expected.json`. Tests the actual
+   skill behavior end-to-end.
 
 ## Checks implemented
 
@@ -31,11 +37,12 @@ Python. This gives us a fast, free, repeatable test harness.
 
 ## How to run
 
+### Python checker (fast, no API calls)
+
 ```bash
-# Install the only dependency
 pip install pyyaml
 
-# Run the full eval suite (from repo root)
+# Run the full eval suite
 python3 agnosticv/skills/validator/eval/score_eval.py
 
 # Run with JSON output
@@ -43,10 +50,25 @@ python3 agnosticv/skills/validator/eval/score_eval.py --json
 
 # Run the checker on a single catalog directory
 python3 agnosticv/skills/validator/eval/agv_checker.py <path-to-catalog-dir>
-
-# Run the checker with JSON output
-python3 agnosticv/skills/validator/eval/agv_checker.py <path-to-catalog-dir> --json
 ```
+
+### LLM evaluator (requires Vertex AI access)
+
+```bash
+pip install 'anthropic[vertex]' pyyaml
+gcloud auth application-default login
+
+# Run the LLM eval suite (uses Claude Sonnet 4.6 by default)
+python3 agnosticv/skills/validator/eval/score_eval_llm.py
+
+# Run with JSON output
+python3 agnosticv/skills/validator/eval/score_eval_llm.py --json
+```
+
+Environment variables:
+- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project (default: `itpc-gcp-octo-eng-claude`)
+- `CLOUD_ML_REGION` — GCP region (default: `global`)
+- `EVAL_MODEL` — Claude model to use (default: `claude-sonnet-4-6`)
 
 ## Test fixtures (dataset)
 
@@ -97,8 +119,10 @@ must find:
 
 ## File overview
 
-| File            | Purpose                                             |
-|-----------------|-----------------------------------------------------|
-| `agv_checker.py`| Standalone checker — runs 10 checks on a catalog dir |
-| `score_eval.py` | Test harness — runs checker on all fixtures, reports  |
-| `fixtures/`     | Golden test dataset (2 clean + 8 broken)             |
+| File                | Purpose                                                    |
+|---------------------|------------------------------------------------------------|
+| `agv_checker.py`    | Standalone Python checker — runs 10 checks on a catalog dir |
+| `score_eval.py`     | Test harness — runs Python checker on all fixtures          |
+| `score_eval_llm.py` | LLM evaluator — sends fixtures to Claude via Vertex AI     |
+| `prompt_template.md`| Validation rules prompt sent to the LLM                    |
+| `fixtures/`         | Golden test dataset (2 clean + 8 broken)                   |
