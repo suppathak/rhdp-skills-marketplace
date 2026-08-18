@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "yaml_syntax"}],
+  "expect_warnings": [],
+  "description": "Intentionally malformed YAML; checker must flag parse error"
+}

@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "uuid_format"}],
+  "expect_warnings": [],
+  "description": "asset_uuid set to 'not-a-valid-uuid'; checker must flag invalid format"
+}

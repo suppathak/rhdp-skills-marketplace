@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "catalog_name_length"}],
+  "expect_warnings": [],
+  "description": "Directory name is 61 chars (limit 50); checker must flag too-long name"
+}

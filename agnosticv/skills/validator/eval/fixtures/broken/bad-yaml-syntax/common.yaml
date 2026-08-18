@@ -1,0 +1,17 @@
+---
+# This file has intentionally broken YAML syntax for testing.
+config: namespace
+cloud_provider: none
+
+__meta__:
+  asset_uuid: a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d
+  catalog:
+    display_name: "Broken YAML Test"
+    category: Labs
+    keywords:
+    - broken
+  # Intentional syntax error: bad indentation + missing value
+  deployer:
+    scm_url: https://github.com/agnosticd/agnosticd-v2
+      scm_ref: main
+    this_line: is: badly: formatted: yaml

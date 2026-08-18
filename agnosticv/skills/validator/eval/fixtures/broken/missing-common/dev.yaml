@@ -1,0 +1,5 @@
+---
+# This directory intentionally has no common.yaml — only dev.yaml.
+__meta__:
+  deployer:
+    scm_ref: main

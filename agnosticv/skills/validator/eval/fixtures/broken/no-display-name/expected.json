@@ -1,0 +1,5 @@
+{
+  "expect_errors": [],
+  "expect_warnings": [{"check": "best_practices"}],
+  "description": "display_name removed; checker must flag with warning (not error)"
+}

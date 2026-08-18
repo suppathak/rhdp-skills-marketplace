@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "category_validation"}],
+  "expect_warnings": [],
+  "description": "category set to 'InvalidCategory'; checker must flag invalid enum"
+}

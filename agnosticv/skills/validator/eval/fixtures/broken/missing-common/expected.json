@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "file_structure"}],
+  "expect_warnings": [],
+  "description": "No common.yaml present; checker must flag missing required file and stop"
+}

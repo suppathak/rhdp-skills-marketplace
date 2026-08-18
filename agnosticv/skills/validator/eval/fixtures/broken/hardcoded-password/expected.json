@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "password_pattern"}],
+  "expect_warnings": [],
+  "description": "common_password set to literal 'SuperSecret123!'; checker must flag static password"
+}

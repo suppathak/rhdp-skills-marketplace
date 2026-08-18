@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "uuid_format"}],
+  "expect_warnings": [],
+  "description": "asset_uuid removed from __meta__; checker must flag missing UUID"
+}
