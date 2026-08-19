@@ -67,16 +67,15 @@ against `expected.json`.
 ## What the score means
 
 The golden dataset (fixtures/) is the **ground truth**. Each fixture has a known
-correct answer. The score measures how well the validator skill follows its own
-rules:
+correct answer. The target is **22/22 (100%)** — every fixture must pass.
 
-- **22/22 (100%)** — skill is working perfectly
-- **20/22 (91%)** — skill has minor issues or LLM non-determinism
-- **Score drops after a skill edit** — you introduced a regression
-- **Score increases after a skill edit** — confirmed improvement
+If any fixture fails:
 
-Run the eval multiple times to account for LLM non-determinism. The score is a
-**benchmark** — track it over time to catch regressions and measure improvements.
+1. **Re-run** — LLMs are non-deterministic; a single failure may pass on retry
+2. **If it fails consistently** — the skill has a bug or the fixture needs updating
+3. **If the score dropped after a skill edit** — you introduced a regression
+
+Track the score over time. It should always be 22/22.
 
 ## How to run
 
