@@ -1,0 +1,5 @@
+{
+  "expect_errors": [],
+  "expect_warnings": [{"check": "file_structure"}],
+  "description": "No description.adoc file present; checker must flag missing recommended file as warning"
+}

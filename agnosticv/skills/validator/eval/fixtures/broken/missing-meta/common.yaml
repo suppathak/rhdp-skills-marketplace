@@ -1,0 +1,11 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+worker_instance_count: 2
+
+common_admin_password: >-
+  {{ lookup('password', output_dir ~ '/common_admin_password', length=12, chars=['ascii_letters', 'digits']) }}
+
+workloads:
+  - agnosticd.core_workloads.ocp4_workload_authentication

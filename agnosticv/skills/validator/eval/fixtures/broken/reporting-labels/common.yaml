@@ -1,0 +1,19 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+__meta__:
+  asset_uuid: a1b2c3d4-e5f6-7890-abcd-ef1234567890
+  deployer:
+    scm_url: https://github.com/agnosticd/agnosticd-v2
+    scm_ref: main
+    execution_environment:
+      image: quay.io/agnosticd/ee-multicloud:chained-2026-07-15
+  catalog:
+    namespace: babylon-catalog-test
+    display_name: Test Reporting Labels
+    category: Labs
+    keywords:
+      - tekton
+    reportingLabels: {}
+    parameters: []

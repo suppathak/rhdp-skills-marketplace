@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "category"}],
+  "expect_warnings": [],
+  "description": "category is Demos with multiuser: true; checker must flag Demos+multiuser conflict"
+}

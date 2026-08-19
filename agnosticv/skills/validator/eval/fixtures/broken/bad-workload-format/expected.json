@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "workloads"}],
+  "expect_warnings": [],
+  "description": "First workload uses short name 'ocp4_workload_authentication' instead of namespace.collection.role; checker must flag invalid format"
+}

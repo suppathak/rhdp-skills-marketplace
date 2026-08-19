@@ -29,6 +29,8 @@
 config: openshift-workloads
 cloud_provider: none
 software_to_deploy: none
+
+tag: main
 openshift_cnv_scale_cluster: true
 clusters:
   - default:
@@ -43,27 +45,27 @@ requirements_content:
     # Assisted Installer Collection
     - name: https://github.com/rhpds/assisted_installer.git
       type: git
-      version: v0.0.8
+      version: "{{ tag }}"
 
     # Core OpenShift Workloads
     - name: https://github.com/agnosticd/core_workloads.git
       type: git
-      version: main
+      version: "{{ tag }}"
 
     # Core Openshift AI Collection
     - name: https://github.com/agnosticd/ai_workloads.git
       type: git
-      version: main
+      version: "{{ tag }}"
 
     # Original Gen AI collection
     - name: https://github.com/rhpds/lb1942.instruct_docling_lab.git
       type: git
-      version: main
+      version: "{{ tag }}"
 
     # Showroom Collection
     - name: https://github.com/agnosticd/showroom.git
       type: git
-      version: v1.6.0
+      version: v1.6.8
 
 # worker count for Auto-scaling
 worker_instance_count: 4
@@ -312,8 +314,6 @@ __meta__:
     instructions:
       - name: Ritesh Shah
         email: rshah@redhat.com
-  anarchy:
-    namespace: babylon-anarchy-4
   # Components to include in template and catalog item
   components:
     - name: openshift

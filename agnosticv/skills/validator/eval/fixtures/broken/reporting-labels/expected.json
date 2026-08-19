@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "reporting_labels"}],
+  "expect_warnings": [],
+  "description": "reportingLabels section exists but primaryBU is absent; checker must flag missing primaryBU as error"
+}

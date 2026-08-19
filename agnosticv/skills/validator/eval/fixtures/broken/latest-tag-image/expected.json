@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "untagged_images"}],
+  "expect_warnings": [],
+  "description": "image uses :latest tag with prod.yaml present; checker must flag untagged/latest image"
+}

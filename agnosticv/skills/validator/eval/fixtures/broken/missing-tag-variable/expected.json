@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "collections"}],
+  "expect_warnings": [],
+  "description": "No top-level tag: variable defined but git collections exist; checker must flag missing tag variable as error"
+}

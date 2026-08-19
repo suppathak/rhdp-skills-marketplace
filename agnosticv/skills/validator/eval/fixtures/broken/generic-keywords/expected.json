@@ -1,0 +1,6 @@
+{
+  "expect_errors": [],
+  "expect_warnings": [],
+  "expect_suggestions": [{"check": "best_practices"}],
+  "description": "all keywords are generic terms; checker must flag generic keywords as suggestion"
+}

@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "deployer"}],
+  "expect_warnings": [],
+  "description": "__meta__.deployer section is missing; checker must flag missing deployer"
+}

@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "anarchy_namespace"}],
+  "expect_warnings": [],
+  "description": "anarchy.namespace is defined in common.yaml; checker must flag it as error"
+}

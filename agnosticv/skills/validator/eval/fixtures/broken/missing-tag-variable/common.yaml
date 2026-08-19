@@ -1,0 +1,29 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+requirements_content:
+  collections:
+    - name: https://github.com/agnosticd/core_workloads.git
+      type: git
+      version: main
+
+workloads:
+  - agnosticd.core_workloads.ocp4_workload_authentication
+
+__meta__:
+  asset_uuid: c3d4e5f6-a7b8-9012-cdef-123456789012
+  deployer:
+    scm_url: https://github.com/agnosticd/agnosticd-v2
+    scm_ref: main
+    execution_environment:
+      image: quay.io/agnosticd/ee-multicloud:chained-2026-07-15
+  catalog:
+    namespace: babylon-catalog-test
+    display_name: Test Missing Tag Variable
+    category: Labs
+    keywords:
+      - tekton
+    reportingLabels:
+      primaryBU: Hybrid_Platforms
+    parameters: []

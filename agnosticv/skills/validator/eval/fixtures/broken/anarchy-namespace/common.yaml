@@ -1,0 +1,20 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+__meta__:
+  asset_uuid: f6a7b8c9-d0e1-2345-fabc-456789012345
+  anarchy:
+    namespace: babylon-anarchy-custom
+  deployer:
+    scm_url: https://github.com/agnosticd/agnosticd-v2
+    scm_ref: main
+    execution_environment:
+      image: quay.io/agnosticd/ee-multicloud:chained-2026-07-15
+  catalog:
+    namespace: babylon-catalog-test
+    display_name: Anarchy Namespace Lab
+    category: Labs
+    keywords:
+      - tekton
+    parameters: []

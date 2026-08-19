@@ -1,0 +1,5 @@
+{
+  "expect_errors": [],
+  "expect_warnings": [{"check": "ee_image_date"}],
+  "description": "EE image date is 2025-01-10 (>90 days old); checker must flag stale image"
+}

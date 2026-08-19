@@ -1,128 +1,188 @@
 # AgnosticV Validator — Eval Suite
 
-A regression test suite for the `agnosticv:validator` skill. It provides two
-evaluation approaches: a fast deterministic Python checker and an LLM-based
-evaluator that invokes Claude via Vertex AI to run the actual validation rules.
+An LLM-based evaluation suite for the `agnosticv:validator` skill. It runs the
+**full SKILL.md + all 5 sub-agent definitions** as the system prompt, gives
+Claude a bash tool, and uses an agentic tool-use loop via Vertex AI. This tests
+the actual skill behavior end-to-end.
 
-## What this is
+## Architecture
 
-The `agnosticv:validator` skill is a 2700-line Markdown prompt that validates
-RHDP catalog YAML configurations. It runs 27+ checks via 5 sub-agents. Every
-check is fully deterministic (regex, string matching, YAML parsing — no LLM
-reasoning), so we provide two ways to test for regressions:
-
-1. **Python checker** (`agv_checker.py` + `score_eval.py`) — re-implements 10
-   of the most impactful checks in plain Python. Fast, free, repeatable.
-2. **LLM evaluator** (`score_eval_llm.py`) — sends each fixture's YAML to
-   Claude via Vertex AI along with the full validation rules, then compares
-   the LLM's structured JSON output against `expected.json`. Tests the actual
-   skill behavior end-to-end.
-
-## Checks implemented
-
-10 checks from `schema-checker` and `metadata-checker`:
-
-| #  | ID                  | What it validates                                          |
-|----|---------------------|------------------------------------------------------------|
-| 1  | file_structure      | `common.yaml` required; `dev.yaml`, `description.adoc` recommended |
-| 2  | uuid_format         | `__meta__.asset_uuid` is a valid RFC 4122 UUID             |
-| 3  | category_validation | `__meta__.catalog.category` is a valid enum value          |
-| 4  | yaml_syntax         | YAML files parse without errors                            |
-| 9  | best_practices      | Display name length, keyword count/quality, owner defined  |
-| 10 | stage_files         | `dev.yaml` exists and parses cleanly                       |
-| 19 | password_pattern    | No hardcoded or hash-based passwords                       |
-| 21 | ee_image_date       | Execution environment image not stale (> 90 days)          |
-| 23 | untagged_images     | No `:latest` or untagged images in prod/event catalogs     |
-| 24 | catalog_name_length | Directory name is 50 characters or fewer                   |
-
-## How to run
-
-### Python checker (fast, no API calls)
-
-```bash
-pip install pyyaml
-
-# Run the full eval suite
-python3 agnosticv/skills/validator/eval/score_eval.py
-
-# Run with JSON output
-python3 agnosticv/skills/validator/eval/score_eval.py --json
-
-# Run the checker on a single catalog directory
-python3 agnosticv/skills/validator/eval/agv_checker.py <path-to-catalog-dir>
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    score_eval_skill.py                       │
+│                      (test runner)                           │
+└──────────────────────┬──────────────────────────────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │   For each fixture ...  │
+          └────────────┬────────────┘
+                       │
+     ┌─────────────────▼──────────────────┐
+     │         System Prompt              │
+     │  ┌──────────────────────────────┐  │
+     │  │  SKILL.md (orchestrator)     │  │
+     │  │  + schema-checker.md         │  │
+     │  │  + metadata-checker.md       │  │
+     │  │  + workload-checker.md       │  │
+     │  │  + sandbox-checker.md        │  │
+     │  │  + ocp-infra-checker.md      │  │
+     │  │         (~190K chars)        │  │
+     │  └──────────────────────────────┘  │
+     └─────────────────┬──────────────────┘
+                       │
+     ┌─────────────────▼──────────────────┐
+     │     Claude (Vertex AI)             │
+     │                                    │
+     │  User msg: ph_payload (headless)   │
+     │  Tool:     bash (ls, grep, cat...) │──── executes bash
+     │                                    │     against fixture
+     │  Returns:  structured JSON         │     directory
+     └─────────────────┬──────────────────┘
+                       │
+     ┌─────────────────▼──────────────────┐
+     │           Scoring                  │
+     │                                    │
+     │  Clean fixture:                    │
+     │    errors == 0  →  PASS            │
+     │    errors >  0  →  FAIL            │
+     │                                    │
+     │  Broken fixture:                   │
+     │    expected check found →  PASS    │
+     │    expected check missing → FAIL   │
+     └─────────────────┬──────────────────┘
+                       │
+          ┌────────────▼────────────┐
+          │   Result: 20/22 passed  │
+          └─────────────────────────┘
 ```
 
-### LLM evaluator (requires Vertex AI access)
+## How it works
+
+`score_eval_skill.py` loads the complete validator skill (SKILL.md,
+schema-checker.md, metadata-checker.md, workload-checker.md, sandbox-checker.md,
+ocp-infra-checker.md) into a single system prompt. For each fixture, it invokes
+Claude in headless mode with a bash tool and compares the structured JSON output
+against `expected.json`.
+
+## What the score means
+
+The golden dataset (fixtures/) is the **ground truth**. Each fixture has a known
+correct answer. The score measures how well the validator skill follows its own
+rules:
+
+- **22/22 (100%)** — skill is working perfectly
+- **20/22 (91%)** — skill has minor issues or LLM non-determinism
+- **Score drops after a skill edit** — you introduced a regression
+- **Score increases after a skill edit** — confirmed improvement
+
+Run the eval multiple times to account for LLM non-determinism. The score is a
+**benchmark** — track it over time to catch regressions and measure improvements.
+
+## How to run
 
 ```bash
 pip install 'anthropic[vertex]' pyyaml
 gcloud auth application-default login
 
-# Run the LLM eval suite (uses Claude Sonnet 4.6 by default)
-python3 agnosticv/skills/validator/eval/score_eval_llm.py
+export ANTHROPIC_VERTEX_PROJECT_ID=<your-gcp-project>
+export CLOUD_ML_REGION=<region>
 
-# Run with JSON output
-python3 agnosticv/skills/validator/eval/score_eval_llm.py --json
+python3 agnosticv/skills/validator/eval/score_eval_skill.py          # human-readable
+python3 agnosticv/skills/validator/eval/score_eval_skill.py --json   # machine-readable
 ```
 
 Environment variables:
-- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID
-- `CLOUD_ML_REGION` — GCP region
-- `EVAL_MODEL` — Claude model to use (default: `claude-sonnet-4-6`)
+- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID (required)
+- `CLOUD_ML_REGION` — GCP region (required)
+- `EVAL_MODEL` — Claude model (default: `claude-sonnet-4-6`)
 
-## Test fixtures (dataset)
+## Checks with fixtures
 
-All fixtures live under `eval/fixtures/`. Each fixture is a directory
-containing catalog YAML files that simulate a real RHDP catalog item.
+| Check | Fixture(s) | Sub-agent | What it validates |
+|---|---|---|---|
+| file_structure | missing-common, missing-description | schema-checker | common.yaml required; description.adoc recommended |
+| uuid | missing-uuid, bad-uuid, missing-meta | schema-checker | asset_uuid is valid RFC 4122 UUID |
+| category | bad-category, demos-multiuser | schema-checker | category is valid enum; Demos+multiuser conflict |
+| yaml_syntax | bad-yaml-syntax | schema-checker | YAML files parse without errors |
+| deployer | missing-deployer | schema-checker | __meta__.deployer section present |
+| reporting_labels | reporting-labels | schema-checker | reportingLabels.primaryBU present |
+| anarchy_namespace | anarchy-namespace | schema-checker | anarchy.namespace not in common.yaml |
+| catalog_name_length | long-dirname-... | schema-checker | directory name ≤ 50 characters |
+| best_practices | no-display-name, generic-keywords | metadata-checker | display name, keyword quality |
+| stage_files | bad-dev-yaml | metadata-checker | dev.yaml exists and parses cleanly |
+| password_pattern | hardcoded-password | metadata-checker | no hardcoded passwords |
+| ee_image_date | stale-ee-image | metadata-checker | EE image not stale (> 90 days) |
+| untagged_images | latest-tag-image | metadata-checker | no :latest or untagged images |
+| workloads | bad-workload-format | workload-checker | namespace.collection.role format |
+| collections | missing-tag-variable | workload-checker | top-level tag: variable required |
+
+Clean fixtures (must produce 0 errors):
+- `clean/ocp-demo` — full real-world catalog item
+- `clean/sandbox-tenant` — sandbox/tenant config
+
+## Fixture format
 
 ```
 fixtures/
-  clean/                  # Valid catalogs — must produce 0 errors
-    ocp-demo/             #   Sourced from catalog-builder/examples/ocp-demo
-    sandbox-tenant/       #   Sourced from catalog-builder/examples/sandbox-tenant
-
-  broken/                 # Catalogs with one planted issue each
-    missing-uuid/         #   asset_uuid removed → expects uuid_format error
-    bad-uuid/             #   UUID set to "not-a-valid-uuid" → expects uuid_format error
-    bad-category/         #   Category set to "InvalidCategory" → expects category_validation error
-    hardcoded-password/   #   Password is literal string → expects password_pattern error
-    no-display-name/      #   display_name removed → expects best_practices warning
-    long-dirname-.../     #   Dir name is 61 chars (limit 50) → expects catalog_name_length error
-    bad-yaml-syntax/      #   Malformed YAML → expects yaml_syntax error
-    missing-common/       #   No common.yaml present → expects file_structure error
+  clean/              # Valid catalogs — 0 errors expected
+    ocp-demo/
+    sandbox-tenant/
+  broken/             # Each has exactly one planted bug
+    missing-uuid/
+    ...
 ```
 
-Each broken fixture includes an `expected.json` that declares what the checker
-must find:
+Each broken fixture contains:
+- `common.yaml` — minimal valid YAML with one planted issue
+- `expected.json` — declares which check must fire:
 
 ```json
 {
-  "expect_errors": [{"check": "uuid_format"}],
+  "expect_errors": [{"check": "reporting_labels"}],
   "expect_warnings": [],
-  "description": "asset_uuid removed; checker must flag missing UUID"
+  "description": "reportingLabels.primaryBU absent; must flag as error"
 }
 ```
 
-## How scoring works
+## Sample output
 
-- **Clean fixtures**: checker must produce 0 errors (warnings are OK).
-- **Broken fixtures**: checker output is compared against `expected.json` —
-  the declared error or warning must appear in the results.
-- Exit code: `0` if all pass, `1` if any fail.
+```
+Full Skill Evaluation (SKILL.md + sub-agents with tool use)
+Model: claude-sonnet-4-6
+Skill prompt size: 190,230 characters
 
-## Adding a new fixture
+  [1/22] Evaluating clean/ocp-demo...          PASS
+  [2/22] Evaluating clean/sandbox-tenant...    PASS
+  [3/22] Evaluating broken/bad-category...     PASS
+  ...
+  [22/22] Evaluating broken/stale-ee-image...  PASS
 
-1. Create a directory under `fixtures/broken/<name>/`
-2. Add `common.yaml` with exactly one planted issue
-3. Add `expected.json` declaring the expected check name
-4. Run `python3 score_eval.py` to verify
+AgnosticV Validator Eval Suite (Full Skill)
+==================================================
 
-## File overview
+Clean fixtures:
+  [PASS] ocp-demo            -- 0 errors (expected: 0)
+  [PASS] sandbox-tenant      -- 0 errors (expected: 0)
 
-| File                | Purpose                                                    |
-|---------------------|------------------------------------------------------------|
-| `agv_checker.py`    | Standalone Python checker — runs 10 checks on a catalog dir |
-| `score_eval.py`     | Test harness — runs Python checker on all fixtures          |
-| `score_eval_llm.py` | LLM evaluator — sends fixtures to Claude via Vertex AI     |
-| `prompt_template.md`| Validation rules prompt sent to the LLM                    |
-| `fixtures/`         | Golden test dataset (2 clean + 8 broken)                   |
+Broken fixtures:
+  [PASS] bad-category        -- caught: category error
+  [PASS] bad-uuid            -- caught: uuid error
+  [PASS] hardcoded-password  -- caught: password_pattern error
+  ...
+
+Result: 22/22 passed
+```
+
+## Scoring rules
+
+- **Clean fixtures**: must produce 0 errors (warnings OK)
+- **Broken fixtures**: output compared against expected.json — declared error/warning must appear
+- Exit code: `0` if all pass, `1` if any fail
+
+## Adding a fixture
+
+1. Create `fixtures/broken/<name>/`
+2. Add `common.yaml` with one planted issue
+3. Add `expected.json` declaring the expected check
+4. Add the check name to `CHECK_ALIASES` in `score_eval_skill.py` if needed
+5. Run the eval to verify

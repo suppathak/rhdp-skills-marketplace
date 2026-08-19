@@ -1,0 +1,5 @@
+{
+  "expect_errors": [{"check": "stage_files"}],
+  "expect_warnings": [],
+  "description": "dev.yaml has a YAML syntax error (unclosed bracket); checker must flag parse failure"
+}

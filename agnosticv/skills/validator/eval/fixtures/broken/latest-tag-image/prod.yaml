@@ -1,0 +1,4 @@
+---
+__meta__:
+  deployer:
+    scm_ref: v1.0.0

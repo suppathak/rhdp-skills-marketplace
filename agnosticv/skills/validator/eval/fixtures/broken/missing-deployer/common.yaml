@@ -1,0 +1,13 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+__meta__:
+  asset_uuid: e5f6a7b8-c9d0-1234-efab-345678901234
+  catalog:
+    namespace: babylon-catalog-test
+    display_name: No Deployer Lab
+    category: Labs
+    keywords:
+      - tekton
+    parameters: []

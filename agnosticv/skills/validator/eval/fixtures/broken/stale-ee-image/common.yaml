@@ -1,0 +1,19 @@
+---
+config: openshift-workloads
+cloud_provider: none
+
+__meta__:
+  asset_uuid: c3d4e5f6-a7b8-9012-cdef-123456789012
+  deployer:
+    scm_url: https://github.com/agnosticd/agnosticd-v2
+    scm_ref: main
+    execution_environment:
+      image: quay.io/agnosticd/ee-multicloud:chained-2025-01-10
+  catalog:
+    namespace: babylon-catalog-test
+    display_name: Stale Image Workshop
+    category: Workshops
+    keywords:
+      - tekton
+      - cnpg
+    parameters: []
