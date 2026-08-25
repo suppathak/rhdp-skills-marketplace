@@ -19,10 +19,15 @@ Environment variables:
     EVAL_MODEL                   — Claude model (default: claude-sonnet-4-6)
 
 Usage:
-    python score_eval_skill.py           # human-readable report
-    python score_eval_skill.py --json    # machine-readable JSON output
+    python score_eval_skill.py                          # run all fixtures
+    python score_eval_skill.py --json                   # machine-readable JSON
+    python score_eval_skill.py --fixture bad-uuid       # run one fixture
+    python score_eval_skill.py --fixture bad-uuid --fixture hardcoded-password
+    python score_eval_skill.py --check uuid             # run all fixtures testing a check
+    python score_eval_skill.py --list                   # list available fixtures and checks
 """
 
+import argparse
 import json
 import os
 import re
@@ -273,6 +278,100 @@ def discover_fixtures(base_dir: str) -> list[str]:
     )
 
 
+def get_fixture_check_map(broken_dir: str) -> dict[str, list[str]]:
+    """Build a mapping of check_name -> [fixture_names] from expected.json files."""
+    check_to_fixtures: dict[str, list[str]] = {}
+    if not os.path.isdir(broken_dir):
+        return check_to_fixtures
+    for fixture_name in sorted(os.listdir(broken_dir)):
+        expected_path = os.path.join(broken_dir, fixture_name, "expected.json")
+        if not os.path.isfile(expected_path):
+            continue
+        with open(expected_path) as f:
+            expected = json.load(f)
+        for entry in expected.get("expect_errors", []):
+            check = entry.get("check", "")
+            check_to_fixtures.setdefault(check, []).append(fixture_name)
+        for entry in expected.get("expect_warnings", []):
+            check = entry.get("check", "")
+            check_to_fixtures.setdefault(check, []).append(fixture_name)
+        for entry in expected.get("expect_suggestions", []):
+            check = entry.get("check", "")
+            check_to_fixtures.setdefault(check, []).append(fixture_name)
+    return check_to_fixtures
+
+
+def list_fixtures_and_checks():
+    """Print available fixtures and checks, then exit."""
+    clean = discover_fixtures(CLEAN_DIR)
+    broken = discover_fixtures(BROKEN_DIR)
+    check_map = get_fixture_check_map(BROKEN_DIR)
+
+    print("Available fixtures:\n")
+    print("  Clean:")
+    for fp in clean:
+        print(f"    {os.path.basename(fp)}")
+    print("\n  Broken:")
+    for fp in broken:
+        name = os.path.basename(fp)
+        expected_path = os.path.join(fp, "expected.json")
+        checks = []
+        if os.path.isfile(expected_path):
+            with open(expected_path) as f:
+                exp = json.load(f)
+            for e in exp.get("expect_errors", []):
+                checks.append(e.get("check", "?"))
+            for w in exp.get("expect_warnings", []):
+                checks.append(w.get("check", "?"))
+            for s in exp.get("expect_suggestions", []):
+                checks.append(s.get("check", "?"))
+        check_str = f" ({', '.join(checks)})" if checks else ""
+        print(f"    {name}{check_str}")
+
+    print("\nAvailable checks (use with --check):\n")
+    for check_name, fixtures in sorted(check_map.items()):
+        print(f"  {check_name:30s} -> {', '.join(fixtures)}")
+
+    print(f"\nTotal: {len(clean)} clean + {len(broken)} broken = {len(clean) + len(broken)} fixtures")
+    print(f"Checks with fixtures: {len(check_map)}")
+
+
+def filter_fixtures(
+    clean: list[str],
+    broken: list[str],
+    fixture_names: list[str] | None,
+    check_names: list[str] | None,
+) -> tuple[list[str], list[str]]:
+    """Filter fixtures based on --fixture and --check arguments."""
+    if not fixture_names and not check_names:
+        return clean, broken
+
+    selected_names: set[str] = set()
+
+    if fixture_names:
+        selected_names.update(fixture_names)
+
+    if check_names:
+        check_map = get_fixture_check_map(BROKEN_DIR)
+        for check in check_names:
+            aliases = CHECK_ALIASES.get(check, {check})
+            for alias in aliases:
+                if alias in check_map:
+                    selected_names.update(check_map[alias])
+
+    if not selected_names:
+        return clean, broken
+
+    filtered_clean = [
+        fp for fp in clean if os.path.basename(fp) in selected_names
+    ]
+    filtered_broken = [
+        fp for fp in broken if os.path.basename(fp) in selected_names
+    ]
+
+    return filtered_clean, filtered_broken
+
+
 def evaluate_clean(
     client: AnthropicVertex, system_prompt: str, fixture_path: str
 ) -> dict:
@@ -379,54 +478,96 @@ def evaluate_broken(
     }
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="AgnosticV Validator Eval Suite — Full skill evaluation with tool use."
+    )
+    parser.add_argument(
+        "--json", action="store_true",
+        help="Machine-readable JSON output",
+    )
+    parser.add_argument(
+        "--fixture", action="append", metavar="NAME",
+        help="Run only the named fixture(s). Can be repeated.",
+    )
+    parser.add_argument(
+        "--check", action="append", metavar="CHECK",
+        help="Run only fixtures that test the named check(s). Can be repeated.",
+    )
+    parser.add_argument(
+        "--list", action="store_true", dest="list_mode",
+        help="List available fixtures and checks, then exit.",
+    )
+    return parser.parse_args()
+
+
 def main():
-    output_json = "--json" in sys.argv
+    args = parse_args()
+
+    if args.list_mode:
+        list_fixtures_and_checks()
+        sys.exit(0)
 
     system_prompt = load_skill_files()
     client = AnthropicVertex(region=REGION, project_id=PROJECT_ID)
 
-    print(f"\nFull Skill Evaluation (SKILL.md + sub-agents with tool use)")
-    print(f"Connecting to Vertex AI ({PROJECT_ID} / {REGION})")
-    print(f"Model: {MODEL}")
-    print(f"Skill prompt size: {len(system_prompt):,} characters\n")
-
-    clean_fixtures = discover_fixtures(CLEAN_DIR)
-    broken_fixtures = discover_fixtures(BROKEN_DIR)
+    all_clean = discover_fixtures(CLEAN_DIR)
+    all_broken = discover_fixtures(BROKEN_DIR)
+    clean_fixtures, broken_fixtures = filter_fixtures(
+        all_clean, all_broken, args.fixture, args.check
+    )
 
     if not clean_fixtures and not broken_fixtures:
-        print("No fixtures found.", file=sys.stderr)
+        if args.fixture or args.check:
+            print("No fixtures matched the filter.", file=sys.stderr)
+            print("Run with --list to see available fixtures and checks.", file=sys.stderr)
+        else:
+            print("No fixtures found.", file=sys.stderr)
         sys.exit(2)
 
-    results: list[dict] = []
     total = len(clean_fixtures) + len(broken_fixtures)
+    is_filtered = args.fixture or args.check
+    filter_label = ""
+    if is_filtered:
+        filter_label = f" (filtered: {total} of {len(all_clean) + len(all_broken)})"
+
+    if not args.json:
+        print(f"\nFull Skill Evaluation (SKILL.md + sub-agents with tool use)")
+        print(f"Connecting to Vertex AI ({PROJECT_ID} / {REGION})")
+        print(f"Model: {MODEL}")
+        print(f"Skill prompt size: {len(system_prompt):,} characters")
+        print(f"Fixtures: {total}{filter_label}\n")
+
+    results: list[dict] = []
 
     for i, fp in enumerate(clean_fixtures, 1):
         name = os.path.basename(fp)
-        if not output_json:
+        if not args.json:
             print(f"  [{i}/{total}] Evaluating clean/{name}...", end=" ", flush=True)
         r = evaluate_clean(client, system_prompt, fp)
         results.append(r)
-        if not output_json:
+        if not args.json:
             print("PASS" if r["passed"] else f"FAIL — {r['detail']}")
 
     for i, fp in enumerate(broken_fixtures, len(clean_fixtures) + 1):
         name = os.path.basename(fp)
-        if not output_json:
+        if not args.json:
             print(f"  [{i}/{total}] Evaluating broken/{name}...", end=" ", flush=True)
         r = evaluate_broken(client, system_prompt, fp)
         results.append(r)
-        if not output_json:
+        if not args.json:
             print("PASS" if r["passed"] else f"FAIL — {r['detail']}")
 
     passed = sum(1 for r in results if r["passed"])
 
-    if output_json:
+    if args.json:
         output = {
             "total": total,
             "passed": passed,
             "failed": total - passed,
             "model": MODEL,
             "mode": "full_skill",
+            "filtered": bool(is_filtered),
             "results": [
                 {k: v for k, v in r.items() if k != "llm_output"} for r in results
             ],
@@ -455,6 +596,8 @@ def main():
         print(f"\nResult: {passed}/{total} passed")
         print(f"Model:  {MODEL}")
         print(f"Mode:   Full skill (SKILL.md + sub-agents + tool use)")
+        if is_filtered:
+            print(f"Filter: {total} of {len(all_clean) + len(all_broken)} fixtures")
         print()
 
     sys.exit(0 if passed == total else 1)
