@@ -2,8 +2,8 @@
 
 An LLM-based evaluation suite for the `agnosticv:validator` skill. It runs the
 **full SKILL.md + all 5 sub-agent definitions** as the system prompt, gives
-Claude a bash tool, and uses an agentic tool-use loop via Vertex AI. This tests
-the actual skill behavior end-to-end.
+a judge model a bash tool, and runs an agentic tool-use loop against any
+Anthropic-compatible gateway or Vertex AI. This tests the actual skill behavior end-to-end.
 
 ## Skill structure
 
@@ -48,7 +48,7 @@ system prompt. Any edit to the skill is automatically tested on the next eval ru
      └─────────────────┬──────────────────┘
                        │
      ┌─────────────────▼──────────────────┐
-     │     Claude (Vertex AI)             │
+     │  Judge model (any backend)         │
      │                                    │
      │  User msg: ph_payload (headless)   │
      │  Tool:     bash (ls, grep, cat...) │──── executes bash
@@ -78,8 +78,11 @@ system prompt. Any edit to the skill is automatically tested on the next eval ru
 `score_eval_skill.py` loads the complete validator skill (SKILL.md,
 schema-checker.md, metadata-checker.md, workload-checker.md, sandbox-checker.md,
 ocp-infra-checker.md) into a single system prompt. For each fixture, it invokes
-Claude in headless mode with a bash tool and compares the structured JSON output
-against `expected.json`.
+the judge model in headless mode with a bash tool and compares the structured
+JSON output against `expected.json`. The tool-use loop is bounded (25 rounds
+per fixture) and resilient to thinking models: a stalled turn — no tool calls
+and no JSON, e.g. an output budget spent entirely on reasoning — is nudged
+back on track instead of failing the fixture.
 
 ## What the score means
 
@@ -88,38 +91,186 @@ correct answer. The target is **22/22 (100%)** — every fixture must pass.
 
 If any fixture fails:
 
-1. **Re-run** — LLMs are non-deterministic; a single failure may pass on retry
-2. **If it fails consistently** — the skill has a bug or the fixture needs updating
-3. **If the score dropped after a skill edit** — you introduced a regression
+1. **Check it is a FAIL, not an ERROR** — an `ERROR` (exit code 2) is an infrastructure problem; just re-run
+2. **Re-run** — LLMs are non-deterministic; a single failure may pass on retry
+3. **If it fails consistently** — the skill has a bug or the fixture needs updating
+4. **If the score dropped after a skill edit** — you introduced a regression
 
 Track the score over time. It should always be 22/22.
 
-## How to run
+## Quick start
+
+1. **Install** — `pip install anthropic pyyaml` (add `'anthropic[vertex]'` for
+   Vertex mode). `pyyaml` is needed because the judge's own bash commands run
+   `python3 -c "import yaml"`.
+2. **Set up a judge model** — pick one setup below (A–D). There is **no
+   default model**: you must choose one.
+3. **Verify** — `--list-models`, then one fixture.
+4. **Run** — one fixture, one check, or the full suite.
 
 ```bash
-pip install 'anthropic[vertex]' pyyaml
-gcloud auth application-default login
-
-export ANTHROPIC_VERTEX_PROJECT_ID=<your-gcp-project>
-export CLOUD_ML_REGION=<region>
-
-python3 agnosticv/skills/validator/eval/score_eval_skill.py                        # run all fixtures
-python3 agnosticv/skills/validator/eval/score_eval_skill.py --json                 # machine-readable
-python3 agnosticv/skills/validator/eval/score_eval_skill.py --fixture bad-uuid     # run one fixture
-python3 agnosticv/skills/validator/eval/score_eval_skill.py --check uuid           # run all uuid fixtures
-python3 agnosticv/skills/validator/eval/score_eval_skill.py --list                 # show available fixtures/checks
+python3 agnosticv/skills/validator/eval/score_eval_skill.py --list-models        # 1. backend reachable?
+python3 agnosticv/skills/validator/eval/score_eval_skill.py --fixture bad-uuid   # 2. one fixture end to end
+python3 agnosticv/skills/validator/eval/score_eval_skill.py --check uuid         # run all fixtures for a check
+python3 agnosticv/skills/validator/eval/score_eval_skill.py                      # full suite
 ```
 
-Filtering options:
+Reasoning models are slow — budget roughly 5–10 minutes per fixture, so the
+full 22 can take hours. Use `--fixture` / `--check` while iterating and run
+the full suite once before merging.
+
+## Setting up a judge model
+
+The suite is model-agnostic: any model the backend serves can be the judge.
+The fixtures are the ground truth; the model is only the instrument. Track the
+score per judge model — an edit that passes with one judge but fails with
+another is still a regression signal.
+
+Pick **one** setup. Never commit URLs, keys, or project IDs — keep them in
+your shell only.
+
+| Variable | Used by | Purpose |
+|---|---|---|
+| `EVAL_MODEL` | all | Judge model id. **Required, no default.** Find ids with `--list-models`. |
+| `ANTHROPIC_BASE_URL` | gateway | Anthropic-compatible endpoint URL |
+| `ANTHROPIC_API_KEY` | gateway | API key for that endpoint |
+| `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION` | Vertex | GCP project and region |
+
+If both gateway and Vertex settings are present, the gateway wins.
+
+### Setup A — Anthropic-compatible gateway (any hosted model)
+
+```bash
+export ANTHROPIC_BASE_URL=https://<your-gateway-host>
+export ANTHROPIC_API_KEY=<your-key>
+python3 agnosticv/skills/validator/eval/score_eval_skill.py --list-models
+export EVAL_MODEL=<model-id>        # pick one from the list above
+```
+
+**Internal model-as-a-service (MaaS) gateways** — such as a platform team's
+shared model endpoint — use exactly this setup. Get the gateway URL and an API
+key from your platform team or internal docs; this repo is public, so never
+paste them into any committed file. Model ids on these gateways usually look
+like `provider/org/model`, so copy them from `--list-models` verbatim.
+
+Reasoning models served this way are slow (several minutes per fixture) and
+spend part of their output budget on thinking. The script streams responses
+and nudges a stalled turn, so a slow fixture is normal — not a hang.
+
+### Setup B — Vertex AI (Claude models)
+
+```bash
+gcloud auth application-default login
+export ANTHROPIC_VERTEX_PROJECT_ID=<your-gcp-project>
+export CLOUD_ML_REGION=<region>
+export EVAL_MODEL=<claude-model-id-enabled-in-your-project>
+```
+
+If your org blocks end-user credentials for `aiplatform.endpoints.predict`,
+use a service account or Setup A instead.
+
+### Setup C — Local model with Ollama
+
+Ollama serves an Anthropic-compatible endpoint, so it uses the gateway path.
+The API key is required by the SDK but ignored by Ollama — any value works.
+
+```bash
+ollama pull <model>
+export ANTHROPIC_BASE_URL=http://localhost:11434
+export ANTHROPIC_API_KEY=ollama
+export EVAL_MODEL=<model>           # the name shown by `ollama list`
+```
+
+**Caveat — context window.** The skill prompt is ~190K characters (~50K
+tokens). Ollama's default context window is far smaller, so the prompt can be
+silently truncated and the model never finishes. Use a model with a large
+context and raise it when starting the server, e.g.
+`OLLAMA_CONTEXT_LENGTH=65536 ollama serve`. A small local model may still
+stall here; treat local models as experimental until a full run reaches 22/22.
+
+### Setup D — OpenAI-style or other providers via LiteLLM
+
+The script speaks the Anthropic protocol only. To use OpenAI-compatible
+providers (or 100+ others), run a [LiteLLM](https://docs.litellm.ai) proxy,
+which exposes an Anthropic-style endpoint, and use it as a gateway (Setup A).
+Direct OpenAI support is not built in.
+
+```bash
+python3 -m venv .venv-litellm && .venv-litellm/bin/pip install 'litellm[proxy]'
+
+cat > litellm-config.yaml <<'EOF'
+model_list:
+  - model_name: my-judge                  # the id you will use as EVAL_MODEL
+    litellm_params:
+      model: <provider>/<model>           # e.g. ollama_chat/<model>, openai/<model>
+      api_base: <provider-url>            # omit for providers with a default
+      api_key: os.environ/PROVIDER_API_KEY
+EOF
+
+export LITELLM_MASTER_KEY=sk-<any-strong-random-string>   # the proxy refuses to start without one
+.venv-litellm/bin/litellm --config litellm-config.yaml --port 4000
+
+# in another shell:
+export ANTHROPIC_BASE_URL=http://localhost:4000
+export ANTHROPIC_API_KEY=$LITELLM_MASTER_KEY
+export EVAL_MODEL=my-judge
+```
+
+Keep `litellm-config.yaml` and the venv out of commits — they hold provider
+settings and keys.
+
+Verified against a local Ollama model: `--list-models` lists the proxy's
+models, and streamed responses with tool calls come back in the Anthropic
+shape the eval loop expects. A full fixture run through the proxy has not
+been done; the judge still needs a large context window and reliable tool
+calling.
+
+## Running the suite
+
+```bash
+python3 agnosticv/skills/validator/eval/score_eval_skill.py [options]
+```
+
 - `--fixture NAME` — run only the named fixture(s). Can be repeated.
 - `--check CHECK` — run only fixtures that test the named check. Can be repeated.
-- `--list` — list all available fixtures and which checks they cover.
+- `--list` — list available fixtures and which checks they cover.
+- `--list-models` — list judge models available on the configured backend.
 - `--json` — machine-readable JSON output.
+- `--output FILE` — save the run record to FILE instead of `outputs/`.
 
-Environment variables:
-- `ANTHROPIC_VERTEX_PROJECT_ID` — GCP project ID (required)
-- `CLOUD_ML_REGION` — GCP region (required)
-- `EVAL_MODEL` — Claude model (default: `claude-sonnet-4-6`)
+**Exit codes**
+
+| Code | Meaning |
+|---|---|
+| `0` | Every selected fixture passed |
+| `1` | At least one fixture **FAILED** — a regression, or a fixture that needs updating |
+| `2` | No failures, but at least one fixture **ERRORED** (gateway timeout, connection error, stalled model). Infrastructure, not a regression — re-run it |
+
+**Security.** The judge model runs bash commands on your machine with your
+user's file permissions. Commands run inside the fixture directory with a
+timeout and a scrubbed environment (API keys and cloud credentials are not
+passed through), but this is not a filesystem sandbox. Only use judge models
+you trust.
+
+## Running from an AI coding agent (Claude Code / OpenCode)
+
+The eval is a plain Python script, so any coding agent that can run shell
+commands can drive it. Export the setup variables (above) in the shell that
+launches the agent — it inherits them.
+
+Short prompts to give the agent:
+
+| Goal | Prompt |
+|---|---|
+| Quick check of what I touched | `I edited agnosticv/agents/schema-checker.md. Run the validator eval for the related checks (python3 agnosticv/skills/validator/eval/score_eval_skill.py --check uuid) and tell me if anything regressed.` |
+| Full regression gate | `Run the full validator eval in the background (python3 agnosticv/skills/validator/eval/score_eval_skill.py), then report the Result line and any FAIL fixtures.` |
+| Explain a failure | `The eval failed. Read the newest file in agnosticv/skills/validator/eval/outputs/ and explain why fixture <name> failed.` |
+| Check setup | `Run score_eval_skill.py --list-models and tell me which judge models are available.` |
+
+Tips for the agent: exit code `0` means all passed, `1` means a regression,
+`2` means an infrastructure error (re-run); the full forensic record is in
+`outputs/eval-<timestamp>.json`; and slow models should run in the background
+rather than blocking the session.
 
 ## Checks with fixtures
 
@@ -225,7 +376,8 @@ Each broken fixture contains:
 
 ```
 Full Skill Evaluation (SKILL.md + sub-agents with tool use)
-Model: claude-sonnet-4-6
+Backend: gateway (ANTHROPIC_BASE_URL)
+Model: <your-model-id>
 Skill prompt size: 190,230 characters
 
   [1/22] Evaluating clean/ocp-demo...          PASS
@@ -254,7 +406,17 @@ Result: 22/22 passed
 
 - **Clean fixtures**: must produce 0 errors (warnings OK)
 - **Broken fixtures**: output compared against expected.json — declared error/warning must appear
-- Exit code: `0` if all pass, `1` if any fail
+- Exit code: `0` all pass, `1` any fail, `2` infrastructure errors only (see Running the suite)
+
+## Run artifacts
+
+Every run saves a full JSON record — including the raw judge verdicts for each
+fixture — to `outputs/eval-<timestamp>.json` (gitignored, never committed).
+`--output FILE` redirects it. The record includes `passed`, `failed`, and
+`errored` counts. The file is written when the run finishes, so a
+run that is killed or times out leaves no record. Stdout stays a lean summary; the file is the
+forensic record, which makes "why did this fixture fail?" answerable after the
+fact and enables score-over-time tracking.
 
 ## Adding a fixture
 
@@ -296,17 +458,25 @@ Goal: run the eval automatically on PRs that touch the validator skill.
 - **Results posted as PR comment** — pass/fail scorecard with the check-level
   breakdown so reviewers can see the impact of skill edits at a glance
 
-### Self-hosted runner for Vertex AI access
+### Runner and credentials for the judge model
 
-The eval calls Claude via Vertex AI, which requires GCP credentials. A
-self-hosted GitHub Actions runner avoids storing long-lived secrets in the repo.
+The eval needs credentials for whichever judge backend you use (gateway API
+key, or GCP credentials for Vertex AI). Storing long-lived secrets in the repo
+is not an option, so run it on a self-hosted GitHub Actions runner that already
+has access, or pass the credentials as repository secrets.
 
-- **Why self-hosted** — pre-authenticated GCP environment, cost control,
-  can be on the same VPC as Vertex AI for lower latency
-- **Requirements** — Linux VM (or container) with Python 3.10+, `gcloud` CLI
-  with a service account authenticated for Vertex AI, GitHub Actions runner
-  agent installed and registered
+- **Why self-hosted** — pre-authenticated environment, cost control, and it
+  can sit next to the model endpoint (same network or VPC) for lower latency
+  and so internal gateways need no public exposure
+- **Requirements** — Linux VM (or container) with Python 3.10+, `anthropic`
+  and `pyyaml`, the judge backend's credentials (gateway key, or `gcloud` with
+  a service account for Vertex AI), and the GitHub Actions runner agent
+  installed and registered
 - **Runner labels** — `self-hosted`, `eval-runner`; workflows target with
   `runs-on: [self-hosted, eval-runner]`
+- **Judge model** — set `EVAL_MODEL` explicitly in the workflow; there is no
+  default
+- **Exit codes in CI** — `1` fails the PR check (regression); `2` means an
+  infrastructure error and should be retried, not treated as a regression
 - **Alternative** — for initial setup, GitHub-hosted runners (`ubuntu-latest`)
-  work with GCP credentials stored as repository secrets
+  work with credentials stored as repository secrets

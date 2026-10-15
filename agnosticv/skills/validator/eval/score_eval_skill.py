@@ -3,20 +3,35 @@
 AgnosticV Validator Eval Suite — Full skill evaluation with tool use.
 
 Runs the ACTUAL validator skill (SKILL.md + sub-agent definitions) against
-each fixture using Claude via Vertex AI with an agentic tool-use loop.
-Claude can call bash commands just like it would in Claude Code.
+each fixture using a judge model of your choice (any Anthropic-compatible
+gateway, or Vertex AI) with an agentic tool-use loop. The judge can call bash
+commands just like it would in Claude Code.
 
 This is the real end-to-end test — not a condensed prompt, but the full
-2700-line skill with all sub-agent logic.
+skill (~190K characters) with all sub-agent logic.
+
+SECURITY: the judge's bash commands run on THIS machine with your user's
+file permissions. The working directory is the fixture and the environment is
+scrubbed of credentials, but this is not a filesystem sandbox — only run
+judge models you trust.
 
 Requires:
-    pip install anthropic[vertex] pyyaml
-    gcloud auth application-default login
+    pip install anthropic pyyaml       (pyyaml: the judge's bash commands
+                                        run `python3 -c "import yaml"`)
+    pip install 'anthropic[vertex]'    (Vertex AI mode only)
+    gcloud auth application-default login   (Vertex AI mode only)
+
+Exit codes: 0 = all passed, 1 = at least one fixture FAILED (regression),
+2 = no failures but at least one fixture ERRORED (infrastructure problem —
+re-run; not evidence of a regression).
 
 Environment variables:
-    ANTHROPIC_VERTEX_PROJECT_ID  — GCP project ID (required)
-    CLOUD_ML_REGION              — GCP region (required)
-    EVAL_MODEL                   — Claude model (default: claude-sonnet-4-6)
+    ANTHROPIC_BASE_URL           — Anthropic-compatible gateway URL (gateway
+                                    mode; auth via ANTHROPIC_API_KEY)
+    ANTHROPIC_VERTEX_PROJECT_ID  — GCP project ID (Vertex mode)
+    CLOUD_ML_REGION              — GCP region (Vertex mode)
+    EVAL_MODEL                   — judge model id (required to run; no default.
+                                    Find ids with --list-models)
 
 Usage:
     python score_eval_skill.py                          # run all fixtures
@@ -25,6 +40,7 @@ Usage:
     python score_eval_skill.py --fixture bad-uuid --fixture hardcoded-password
     python score_eval_skill.py --check uuid             # run all fixtures testing a check
     python score_eval_skill.py --list                   # list available fixtures and checks
+    python score_eval_skill.py --list-models            # list judge models on the backend
 """
 
 import argparse
@@ -33,14 +49,15 @@ import os
 import re
 import subprocess
 import sys
-from datetime import date
+from datetime import date, datetime
 
 try:
-    from anthropic import AnthropicVertex
+    from anthropic import Anthropic, AnthropicVertex
 except ImportError:
     sys.exit(
-        "ERROR: anthropic[vertex] is required.\n"
-        "Install with:  pip install 'anthropic[vertex]'"
+        "ERROR: the anthropic package is required.\n"
+        "Install with:  pip install anthropic   "
+        "(Vertex AI mode: pip install 'anthropic[vertex]')"
     )
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -50,20 +67,41 @@ FIXTURES_DIR = os.path.join(SCRIPT_DIR, "fixtures")
 CLEAN_DIR = os.path.join(FIXTURES_DIR, "clean")
 BROKEN_DIR = os.path.join(FIXTURES_DIR, "broken")
 
+BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
 PROJECT_ID = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "")
 REGION = os.environ.get("CLOUD_ML_REGION", "")
-MODEL = os.environ.get("EVAL_MODEL", "claude-sonnet-4-6")
+MODEL = os.environ.get("EVAL_MODEL", "")  # no default: the judge is always explicit
 
-if not PROJECT_ID or not REGION:
+# Gateway mode: any Anthropic-compatible endpoint (set ANTHROPIC_BASE_URL).
+# Vertex mode: Google Cloud Vertex AI (set project + region).
+USE_GATEWAY = bool(BASE_URL)
+if USE_GATEWAY and (PROJECT_ID or REGION):
+    print(
+        "NOTE: both gateway and Vertex settings are present — using the "
+        "gateway (ANTHROPIC_BASE_URL takes precedence).",
+        file=sys.stderr,
+    )
+
+if not USE_GATEWAY and (not PROJECT_ID or not REGION):
     sys.exit(
-        "ERROR: Set ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION.\n"
-        "Example:\n"
+        "ERROR: Set ANTHROPIC_BASE_URL (gateway mode) or both\n"
+        "ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION (Vertex mode).\n"
+        "Examples:\n"
+        "  export ANTHROPIC_BASE_URL=https://your-gateway.example\n"
+        "  export ANTHROPIC_API_KEY=<key>\n"
+        "or:\n"
         "  export ANTHROPIC_VERTEX_PROJECT_ID=my-gcp-project\n"
         "  export CLOUD_ML_REGION=us-east5"
     )
 
 MAX_TOOL_ROUNDS = 25
+MAX_STALLS = 3  # nudges before giving up on a stalled (no-tool-call, no-JSON) turn
 BASH_TIMEOUT = 10
+# Per-turn output budget. Thinking models can spend the entire budget on
+# reasoning before emitting tool calls or the verdict, so keep headroom.
+MAX_TOKENS = 16384
+# Environment passed to judge-issued bash commands (allowlist — no secrets).
+SAFE_ENV_VARS = ("PATH", "HOME", "LANG", "LC_ALL", "TMPDIR", "VIRTUAL_ENV")
 
 CHECK_ALIASES = {
     "uuid_format": {"uuid_format", "uuid"},
@@ -108,6 +146,69 @@ BASH_TOOL = {
 }
 
 
+def make_client():
+    """Build the API client — gateway (ANTHROPIC_BASE_URL) or Vertex AI."""
+    if USE_GATEWAY:
+        return Anthropic()  # reads ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY
+    return AnthropicVertex(region=REGION, project_id=PROJECT_ID)
+
+
+def list_models():
+    """List judge models available on the configured backend."""
+    try:
+        models = make_client().models.list()
+    except Exception as e:
+        sys.exit(f"ERROR: Model listing not supported on this backend: {e}")
+    print("Available judge models (select with EVAL_MODEL):")
+    for m in models.data:
+        print(f"  {m.id}")
+
+
+def status_of(r: dict) -> str:
+    """PASS / FAIL (regression) / ERROR (infrastructure — re-run)."""
+    if r.get("errored"):
+        return "ERROR"
+    return "PASS" if r["passed"] else "FAIL"
+
+
+def save_results(
+    results: list[dict], total: int, output_path: str | None, filtered: bool
+) -> str:
+    """Write the full run record — including raw judge verdicts — as JSON.
+
+    Defaults to outputs/eval-<timestamp>.json so every run leaves a trace;
+    --output overrides the destination.
+    """
+    passed = sum(1 for r in results if r["passed"])
+    record = {
+        "timestamp": datetime.now().isoformat(timespec="seconds"),
+        "total": total,
+        "passed": passed,
+        "failed": sum(1 for r in results if status_of(r) == "FAIL"),
+        "errored": sum(1 for r in results if status_of(r) == "ERROR"),
+        "model": MODEL,
+        "mode": "full_skill",
+        "filtered": filtered,
+        "results": results,
+    }
+
+    if output_path:
+        path = output_path
+    else:
+        out_dir = os.path.join(SCRIPT_DIR, "outputs")
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        path = os.path.join(out_dir, f"eval-{stamp}.json")
+        n = 1
+        while os.path.exists(path):  # never overwrite a previous record
+            path = os.path.join(out_dir, f"eval-{stamp}-{n}.json")
+            n += 1
+
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(record, f, indent=2)
+    return path
+
+
 def load_skill_files() -> str:
     """Load SKILL.md and all sub-agent .md files into a combined prompt."""
     parts = []
@@ -135,7 +236,18 @@ def load_skill_files() -> str:
 
 
 def run_bash(command: str, fixture_path: str) -> str:
-    """Execute a bash command, sandboxed to the fixture area."""
+    """Execute a judge-issued bash command in the fixture directory.
+
+    NOT a filesystem sandbox: the command runs with the caller's file
+    permissions. What it does enforce: cwd is the fixture, a timeout, and a
+    scrubbed environment so API keys and cloud credentials never reach the
+    judge via `env`.
+    """
+    safe_env = {
+        k: os.environ[k]
+        for k in SAFE_ENV_VARS
+        if k in os.environ
+    }
     try:
         result = subprocess.run(
             ["bash", "-c", command],
@@ -143,6 +255,7 @@ def run_bash(command: str, fixture_path: str) -> str:
             text=True,
             timeout=BASH_TIMEOUT,
             cwd=fixture_path,
+            env=safe_env,
         )
         output = result.stdout
         if result.stderr:
@@ -205,7 +318,7 @@ def extract_json_from_text(text: str) -> dict | None:
 
 
 def run_skill_on_fixture(
-    client: AnthropicVertex, system_prompt: str, fixture_path: str
+    client: Anthropic | AnthropicVertex, system_prompt: str, fixture_path: str
 ) -> dict:
     """Run the full validator skill against a fixture using agentic tool-use loop."""
     payload = build_headless_payload(fixture_path)
@@ -222,32 +335,66 @@ def run_skill_on_fixture(
     )
 
     messages = [{"role": "user", "content": user_message}]
+    stalls = 0
 
     for _ in range(MAX_TOOL_ROUNDS):
-        response = client.messages.create(
+        # Streamed: non-streaming calls can exceed gateway connection limits
+        # (~10 min) when a thinking model reasons long on the large skill
+        # prompt. Streaming keeps the connection alive for the whole turn.
+        with client.messages.stream(
             model=MODEL,
-            max_tokens=8192,
+            max_tokens=MAX_TOKENS,
             system=system_prompt,
             messages=messages,
             tools=[BASH_TOOL],
-        )
-
-        if response.stop_reason == "end_of_turn":
-            for block in response.content:
-                if hasattr(block, "text") and block.text:
-                    result = extract_json_from_text(block.text)
-                    if result:
-                        return result
-            raise ValueError("No JSON in final response")
+        ) as stream:
+            response = stream.get_final_message()
 
         tool_calls = [b for b in response.content if b.type == "tool_use"]
-        if not tool_calls:
+
+        # Final-answer turn (or a stall): no tool calls, so look for the JSON
+        # verdict in any text blocks. "end_turn" is the standard Anthropic
+        # stop reason; "end_of_turn" is kept for gateway compatibility.
+        if response.stop_reason in ("end_turn", "end_of_turn") or not tool_calls:
             for block in response.content:
                 if hasattr(block, "text") and block.text:
                     result = extract_json_from_text(block.text)
                     if result:
                         return result
-            raise ValueError("No tool calls and no JSON found")
+
+            # Stalled: no tool calls and no JSON — e.g. a thinking model that
+            # spent its whole output budget reasoning, or prose without the
+            # verdict. Nudge it back on track instead of failing the fixture.
+            stalls += 1
+            if stalls > MAX_STALLS:
+                raise ValueError(
+                    "No tool calls and no JSON found "
+                    f"(last stop_reason: {response.stop_reason})"
+                )
+            # Echo only text blocks back — thinking blocks may be truncated
+            # mid-stream and rejected by the API on the next turn.
+            text_blocks = [
+                {"type": "text", "text": b.text}
+                for b in response.content
+                if b.type == "text" and b.text
+            ]
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": text_blocks or [{"type": "text", "text": "(no output)"}],
+                }
+            )
+            messages.append(
+                {
+                    "role": "user",
+                    "content": (
+                        "Continue the validation. Use the bash tool to inspect "
+                        "the catalog files, or if all checks are done, return "
+                        "ONLY the final JSON verdict — no prose, no explanation."
+                    ),
+                }
+            )
+            continue
 
         messages.append({"role": "assistant", "content": response.content})
 
@@ -373,7 +520,7 @@ def filter_fixtures(
 
 
 def evaluate_clean(
-    client: AnthropicVertex, system_prompt: str, fixture_path: str
+    client: Anthropic | AnthropicVertex, system_prompt: str, fixture_path: str
 ) -> dict:
     name = os.path.basename(fixture_path)
     try:
@@ -397,13 +544,14 @@ def evaluate_clean(
             "name": name,
             "type": "clean",
             "passed": False,
+            "errored": True,  # infrastructure problem, not a regression
             "detail": f"LLM call failed: {exc}",
             "llm_output": None,
         }
 
 
 def evaluate_broken(
-    client: AnthropicVertex, system_prompt: str, fixture_path: str
+    client: Anthropic | AnthropicVertex, system_prompt: str, fixture_path: str
 ) -> dict:
     name = os.path.basename(fixture_path)
     expected_file = os.path.join(fixture_path, "expected.json")
@@ -427,6 +575,7 @@ def evaluate_broken(
             "name": name,
             "type": "broken",
             "passed": False,
+            "errored": True,  # infrastructure problem, not a regression
             "detail": f"LLM call failed: {exc}",
             "llm_output": None,
         }
@@ -498,6 +647,15 @@ def parse_args():
         "--list", action="store_true", dest="list_mode",
         help="List available fixtures and checks, then exit.",
     )
+    parser.add_argument(
+        "--list-models", action="store_true", dest="list_models_mode",
+        help="List judge models available on the backend, then exit.",
+    )
+    parser.add_argument(
+        "--output", metavar="FILE",
+        help="Save the full run record (with raw verdicts) to FILE. "
+             "Default: outputs/eval-<timestamp>.json.",
+    )
     return parser.parse_args()
 
 
@@ -508,8 +666,19 @@ def main():
         list_fixtures_and_checks()
         sys.exit(0)
 
+    if args.list_models_mode:
+        list_models()
+        sys.exit(0)
+
+    if not MODEL:
+        sys.exit(
+            "ERROR: EVAL_MODEL is not set — choose a judge model explicitly.\n"
+            "  python3 score_eval_skill.py --list-models   # see what the backend offers\n"
+            "  export EVAL_MODEL=<model-id>"
+        )
+
     system_prompt = load_skill_files()
-    client = AnthropicVertex(region=REGION, project_id=PROJECT_ID)
+    client = make_client()
 
     all_clean = discover_fixtures(CLEAN_DIR)
     all_broken = discover_fixtures(BROKEN_DIR)
@@ -533,7 +702,10 @@ def main():
 
     if not args.json:
         print(f"\nFull Skill Evaluation (SKILL.md + sub-agents with tool use)")
-        print(f"Connecting to Vertex AI ({PROJECT_ID} / {REGION})")
+        if USE_GATEWAY:
+            print("Backend: gateway (ANTHROPIC_BASE_URL)")
+        else:
+            print("Backend: Vertex AI")
         print(f"Model: {MODEL}")
         print(f"Skill prompt size: {len(system_prompt):,} characters")
         print(f"Fixtures: {total}{filter_label}\n")
@@ -547,7 +719,7 @@ def main():
         r = evaluate_clean(client, system_prompt, fp)
         results.append(r)
         if not args.json:
-            print("PASS" if r["passed"] else f"FAIL — {r['detail']}")
+            print("PASS" if r["passed"] else f"{status_of(r)} — {r['detail']}")
 
     for i, fp in enumerate(broken_fixtures, len(clean_fixtures) + 1):
         name = os.path.basename(fp)
@@ -556,18 +728,21 @@ def main():
         r = evaluate_broken(client, system_prompt, fp)
         results.append(r)
         if not args.json:
-            print("PASS" if r["passed"] else f"FAIL — {r['detail']}")
+            print("PASS" if r["passed"] else f"{status_of(r)} — {r['detail']}")
 
     passed = sum(1 for r in results if r["passed"])
+    saved_path = save_results(results, total, args.output, is_filtered)
 
     if args.json:
         output = {
             "total": total,
             "passed": passed,
-            "failed": total - passed,
+            "failed": sum(1 for r in results if status_of(r) == "FAIL"),
+            "errored": sum(1 for r in results if status_of(r) == "ERROR"),
             "model": MODEL,
             "mode": "full_skill",
             "filtered": bool(is_filtered),
+            "saved_to": saved_path,
             "results": [
                 {k: v for k, v in r.items() if k != "llm_output"} for r in results
             ],
@@ -584,23 +759,28 @@ def main():
         if clean_results:
             print("\nClean fixtures:")
             for r in clean_results:
-                status = "PASS" if r["passed"] else "FAIL"
-                print(f"  [{status}] {r['name']:40s} -- {r['detail']}")
+                print(f"  [{status_of(r)}] {r['name']:40s} -- {r['detail']}")
 
         if broken_results:
             print("\nBroken fixtures:")
             for r in broken_results:
-                status = "PASS" if r["passed"] else "FAIL"
-                print(f"  [{status}] {r['name']:40s} -- {r['detail']}")
+                print(f"  [{status_of(r)}] {r['name']:40s} -- {r['detail']}")
 
         print(f"\nResult: {passed}/{total} passed")
+        n_err = sum(1 for r in results if status_of(r) == "ERROR")
+        if n_err:
+            print(f"Errors: {n_err} fixture(s) hit infrastructure errors "
+                  f"(not regressions) — re-run those")
         print(f"Model:  {MODEL}")
         print(f"Mode:   Full skill (SKILL.md + sub-agents + tool use)")
         if is_filtered:
             print(f"Filter: {total} of {len(all_clean) + len(all_broken)} fixtures")
+        print(f"Saved:  {saved_path}")
         print()
 
-    sys.exit(0 if passed == total else 1)
+    failed = sum(1 for r in results if status_of(r) == "FAIL")
+    errored = sum(1 for r in results if status_of(r) == "ERROR")
+    sys.exit(1 if failed else 2 if errored else 0)
 
 
 if __name__ == "__main__":
