@@ -26,8 +26,11 @@ Exit codes: 0 = all passed, 1 = at least one fixture FAILED (regression),
 re-run; not evidence of a regression).
 
 Environment variables:
-    ANTHROPIC_BASE_URL           — Anthropic-compatible gateway URL (gateway
-                                    mode; auth via ANTHROPIC_API_KEY)
+    EVAL_BASE_URL                — Anthropic-compatible gateway URL (gateway
+                                    mode). Falls back to ANTHROPIC_BASE_URL.
+    EVAL_API_KEY                 — API key for that gateway (any provider's key,
+                                    e.g. an EnMaaS key). Falls back to
+                                    ANTHROPIC_API_KEY.
     ANTHROPIC_VERTEX_PROJECT_ID  — GCP project ID (Vertex mode)
     CLOUD_ML_REGION              — GCP region (Vertex mode)
     EVAL_MODEL                   — judge model id (required to run; no default.
@@ -67,28 +70,35 @@ FIXTURES_DIR = os.path.join(SCRIPT_DIR, "fixtures")
 CLEAN_DIR = os.path.join(FIXTURES_DIR, "clean")
 BROKEN_DIR = os.path.join(FIXTURES_DIR, "broken")
 
-BASE_URL = os.environ.get("ANTHROPIC_BASE_URL", "")
+# Provider-neutral names win; the Anthropic SDK's own names remain a fallback.
+# A trailing "/v1" is dropped because the SDK appends /v1/messages itself.
+BASE_URL = (
+    os.environ.get("EVAL_BASE_URL") or os.environ.get("ANTHROPIC_BASE_URL") or ""
+).rstrip("/")
+if BASE_URL.endswith("/v1"):
+    BASE_URL = BASE_URL[: -len("/v1")]
+API_KEY = os.environ.get("EVAL_API_KEY") or os.environ.get("ANTHROPIC_API_KEY") or None
 PROJECT_ID = os.environ.get("ANTHROPIC_VERTEX_PROJECT_ID", "")
 REGION = os.environ.get("CLOUD_ML_REGION", "")
 MODEL = os.environ.get("EVAL_MODEL", "")  # no default: the judge is always explicit
 
-# Gateway mode: any Anthropic-compatible endpoint (set ANTHROPIC_BASE_URL).
+# Gateway mode: any Anthropic-compatible endpoint (set EVAL_BASE_URL).
 # Vertex mode: Google Cloud Vertex AI (set project + region).
 USE_GATEWAY = bool(BASE_URL)
 if USE_GATEWAY and (PROJECT_ID or REGION):
     print(
         "NOTE: both gateway and Vertex settings are present — using the "
-        "gateway (ANTHROPIC_BASE_URL takes precedence).",
+        "gateway (EVAL_BASE_URL / ANTHROPIC_BASE_URL takes precedence).",
         file=sys.stderr,
     )
 
 if not USE_GATEWAY and (not PROJECT_ID or not REGION):
     sys.exit(
-        "ERROR: Set ANTHROPIC_BASE_URL (gateway mode) or both\n"
+        "ERROR: Set EVAL_BASE_URL (gateway mode) or both\n"
         "ANTHROPIC_VERTEX_PROJECT_ID and CLOUD_ML_REGION (Vertex mode).\n"
         "Examples:\n"
-        "  export ANTHROPIC_BASE_URL=https://your-gateway.example\n"
-        "  export ANTHROPIC_API_KEY=<key>\n"
+        "  export EVAL_BASE_URL=https://your-gateway.example\n"
+        "  export EVAL_API_KEY=<key>\n"
         "or:\n"
         "  export ANTHROPIC_VERTEX_PROJECT_ID=my-gcp-project\n"
         "  export CLOUD_ML_REGION=us-east5"
@@ -147,9 +157,9 @@ BASH_TOOL = {
 
 
 def make_client():
-    """Build the API client — gateway (ANTHROPIC_BASE_URL) or Vertex AI."""
+    """Build the API client — gateway (EVAL_BASE_URL) or Vertex AI."""
     if USE_GATEWAY:
-        return Anthropic()  # reads ANTHROPIC_BASE_URL + ANTHROPIC_API_KEY
+        return Anthropic(base_url=BASE_URL, api_key=API_KEY)
     return AnthropicVertex(region=REGION, project_id=PROJECT_ID)
 
 
@@ -703,7 +713,7 @@ def main():
     if not args.json:
         print(f"\nFull Skill Evaluation (SKILL.md + sub-agents with tool use)")
         if USE_GATEWAY:
-            print("Backend: gateway (ANTHROPIC_BASE_URL)")
+            print("Backend: gateway")
         else:
             print("Backend: Vertex AI")
         print(f"Model: {MODEL}")

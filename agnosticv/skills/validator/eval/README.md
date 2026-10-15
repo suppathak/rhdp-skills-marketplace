@@ -132,26 +132,74 @@ your shell only.
 | Variable | Used by | Purpose |
 |---|---|---|
 | `EVAL_MODEL` | all | Judge model id. **Required, no default.** Find ids with `--list-models`. |
-| `ANTHROPIC_BASE_URL` | gateway | Anthropic-compatible endpoint URL |
-| `ANTHROPIC_API_KEY` | gateway | API key for that endpoint |
+| `EVAL_BASE_URL` | gateway | Anthropic-compatible endpoint URL (a trailing `/v1` is fine) |
+| `EVAL_API_KEY` | gateway | API key for that endpoint — any provider's key, e.g. an EnMaaS key |
 | `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION` | Vertex | GCP project and region |
 
 If both gateway and Vertex settings are present, the gateway wins.
 
+The `EVAL_*` names are provider-neutral. The Anthropic SDK's own `ANTHROPIC_BASE_URL`
+and `ANTHROPIC_API_KEY` still work as a fallback, but `EVAL_*` wins when both are set.
+
 ### Setup A — Anthropic-compatible gateway (any hosted model)
 
 ```bash
-export ANTHROPIC_BASE_URL=https://<your-gateway-host>
-export ANTHROPIC_API_KEY=<your-key>
+export EVAL_BASE_URL=https://<your-gateway-host>
+export EVAL_API_KEY=<your-key>
 python3 agnosticv/skills/validator/eval/score_eval_skill.py --list-models
 export EVAL_MODEL=<model-id>        # pick one from the list above
 ```
 
-**Internal model-as-a-service (MaaS) gateways** — such as a platform team's
-shared model endpoint — use exactly this setup. Get the gateway URL and an API
-key from your platform team or internal docs; this repo is public, so never
-paste them into any committed file. Model ids on these gateways usually look
-like `provider/org/model`, so copy them from `--list-models` verbatim.
+#### Using EnMaaS (Red Hat's internal AI gateway)
+
+EnMaaS is an Anthropic-compatible gateway, so it works with Setup A as-is.
+You need an **EnMaaS key** — not an Anthropic key.
+
+1. **Get a key** from the EnMaaS onboarding page (corporate VPN required) and
+   keep it in a secret manager. Don't request keys from individual operators.
+2. **Get the gateway URL** from the same page. This repo is public, so never
+   paste the URL or key into a committed file.
+3. **Export both**, entering the key without echoing it or saving it to shell
+   history (zsh):
+
+   ```bash
+   read -s "EVAL_API_KEY?EnMaaS key: " && export EVAL_API_KEY; echo
+   export EVAL_BASE_URL="<gateway URL from the EnMaaS page>"   # a trailing /v1 is fine
+   ```
+
+   (bash: `read -s -p "EnMaaS key: " EVAL_API_KEY && export EVAL_API_KEY; echo`)
+
+   If the key already lives in a variable such as `ENMAAS_KEY`, alias it:
+   `export EVAL_API_KEY="$ENMAAS_KEY"`.
+4. **Smoke-test the key** against the hosted GLM model:
+
+   ```bash
+   curl -s "$EVAL_BASE_URL/v1/messages" \
+     -H "x-api-key: $EVAL_API_KEY" \
+     -H "anthropic-version: 2023-06-01" \
+     -H "content-type: application/json" \
+     -d '{"model":"rits/zai-org/glm-5-3","max_tokens":128,"messages":[{"role":"user","content":"Reply with exactly OK."}]}'
+   ```
+
+   A JSON reply containing `"OK"` means the key works. A `thinking` block
+   before the answer is normal.
+5. **Pick the model and run one fixture:**
+
+   ```bash
+   export EVAL_MODEL=rits/zai-org/glm-5-3
+   python3 agnosticv/skills/validator/eval/score_eval_skill.py --fixture bad-uuid
+   ```
+
+**`--list-models` may not show GLM.** The EnMaaS catalog depends on the
+credential and can omit hosted models. That does not mean the model is
+unavailable — set `EVAL_MODEL` to the exact id (as above) and it works. Hosted
+GLM is text-only, which is fine for this suite. This script talks to the
+Anthropic Messages endpoint (`/v1/messages`), which EnMaaS serves for GLM.
+
+**Other gateways** work the same way: any internal or hosted model gateway that
+speaks the Anthropic Messages protocol. Model ids usually look like
+`provider/org/model`, so copy them from `--list-models` or your gateway docs
+verbatim.
 
 Reasoning models served this way are slow (several minutes per fixture) and
 spend part of their output budget on thinking. The script streams responses
@@ -176,8 +224,8 @@ The API key is required by the SDK but ignored by Ollama — any value works.
 
 ```bash
 ollama pull <model>
-export ANTHROPIC_BASE_URL=http://localhost:11434
-export ANTHROPIC_API_KEY=ollama
+export EVAL_BASE_URL=http://localhost:11434
+export EVAL_API_KEY=ollama
 export EVAL_MODEL=<model>           # the name shown by `ollama list`
 ```
 
@@ -211,8 +259,8 @@ export LITELLM_MASTER_KEY=sk-<any-strong-random-string>   # the proxy refuses to
 .venv-litellm/bin/litellm --config litellm-config.yaml --port 4000
 
 # in another shell:
-export ANTHROPIC_BASE_URL=http://localhost:4000
-export ANTHROPIC_API_KEY=$LITELLM_MASTER_KEY
+export EVAL_BASE_URL=http://localhost:4000
+export EVAL_API_KEY=$LITELLM_MASTER_KEY
 export EVAL_MODEL=my-judge
 ```
 
@@ -376,7 +424,7 @@ Each broken fixture contains:
 
 ```
 Full Skill Evaluation (SKILL.md + sub-agents with tool use)
-Backend: gateway (ANTHROPIC_BASE_URL)
+Backend: gateway
 Model: <your-model-id>
 Skill prompt size: 190,230 characters
 
