@@ -1,0 +1,149 @@
+{
+  "timestamp": "2026-10-15T05:38:38",
+  "total": 1,
+  "passed": 1,
+  "failed": 0,
+  "errored": 0,
+  "model": "rits/zai-org/glm-5-3",
+  "mode": "full_skill",
+  "filtered": [
+    "missing-uuid"
+  ],
+  "results": [
+    {
+      "name": "missing-uuid",
+      "type": "broken",
+      "passed": true,
+      "detail": "caught: uuid_format error",
+      "llm_output": {
+        "status": "failed",
+        "catalog_path": "<repo>/agnosticv/skills/validator/eval/fixtures/broken/missing-uuid",
+        "validation_scope": "standard",
+        "errors": [
+          {
+            "check": "uuid",
+            "check_id": 2,
+            "severity": "ERROR",
+            "message": "Missing __meta__.asset_uuid",
+            "location": "common.yaml:__meta__.asset_uuid",
+            "fix": "Add asset_uuid as a direct child of __meta__. Generate with: uuidgen | tr '[:upper:]' '[:lower:]'",
+            "current": null,
+            "example": "__meta__:\n  asset_uuid: 5ac92190-6f0d-4c0e-a9bd-3b20dd3c816f"
+          },
+          {
+            "check": "tenant_workloads",
+            "check_id": 6,
+            "severity": "ERROR",
+            "message": "ocp4_workload_ocp_console_embed present in Tenant CI workloads \u2014 it belongs in the Cluster CI",
+            "location": "common.yaml:workloads",
+            "fix": "Remove agnosticd.showroom.ocp4_workload_ocp_console_embed from Tenant CI workloads and add it to the Cluster CI workloads instead. ocp_console_embed configures cluster-level OAuth and CORS \u2014 a one-time cluster operation, not a per-tenant operation.",
+            "current": "agnosticd.showroom.ocp4_workload_ocp_console_embed",
+            "example": null
+          }
+        ],
+        "warnings": [
+          {
+            "check": "file_structure",
+            "check_id": 1,
+            "severity": "WARNING",
+            "message": "Recommended file missing: description.adoc",
+            "location": "missing-uuid/",
+            "fix": "Create description.adoc for catalog documentation"
+          },
+          {
+            "check": "asciidoc",
+            "check_id": 16,
+            "severity": "WARNING",
+            "message": "Missing description.adoc",
+            "location": "missing-uuid/description.adoc",
+            "fix": "Create description.adoc for catalog documentation"
+          },
+          {
+            "check": "collections",
+            "check_id": 13,
+            "severity": "WARNING",
+            "message": "Showroom collection version below recommended: v1.6.0 (recommend v1.6.8+)",
+            "location": "common.yaml:requirements_content.collections",
+            "current": "v1.6.0",
+            "recommendation": "Set version: v1.6.8 or above for the agnosticd/showroom collection"
+          },
+          {
+            "check": "runtime_automation",
+            "check_id": 25,
+            "severity": "WARNING",
+            "message": "E2E testing (solve/validate buttons) not configured",
+            "location": "common.yaml",
+            "recommendation": "Add ocp4_workload_showroom_runtime_automation_enable: true and ocp4_workload_showroom_runtime_automation_image: \"quay.io/rhpds/zt-runner:v2.4.2\" to enable solve/validate buttons in Showroom"
+          },
+          {
+            "check": "ee_image_date",
+            "check_id": 21,
+            "severity": "WARNING",
+            "message": "Execution environment image is 234 days old",
+            "location": "common.yaml:__meta__.deployer.execution_environment.image",
+            "current": "quay.io/agnosticd/ee-multicloud:chained-2026-02-23",
+            "recommendation": "Update to: image: quay.io/agnosticd/ee-multicloud:chained-2026-02-23"
+          },
+          {
+            "check": "deployer_actions",
+            "check_id": 6,
+            "severity": "WARNING",
+            "message": "deployer.actions.status.disable is not true \u2014 status action is not supported for namespace-config Tenant CIs",
+            "location": "common.yaml:__meta__.deployer.actions.status",
+            "recommendation": "Add status: disable: true under __meta__.deployer.actions"
+          },
+          {
+            "check": "deployer_actions",
+            "check_id": 6,
+            "severity": "WARNING",
+            "message": "deployer.actions.update.disable is not true \u2014 update action is not supported for namespace-config Tenant CIs",
+            "location": "common.yaml:__meta__.deployer.actions.update",
+            "recommendation": "Add update: disable: true under __meta__.deployer.actions"
+          }
+        ],
+        "suggestions": [],
+        "passed_checks": [
+          "\u2713 Required file present: common.yaml",
+          "\u2713 Recommended file present: dev.yaml",
+          "\u2713 Category valid: Labs",
+          "\u2713 dev.yaml syntax valid",
+          "\u2713 Deployer configuration present",
+          "\u2713 Execution environment image valid",
+          "\u2713 Reporting labels configured: primaryBU=Hybrid_Platforms",
+          "\u2713 anarchy.namespace not defined (correct)",
+          "\u2713 Catalog directory name length OK (12/50 chars): missing-uuid",
+          "\u2713 Display name length OK (15 chars)",
+          "\u2713 dev.yaml present",
+          "\u2713 All 1 password variable(s) use lookup('password') with unique paths",
+          "\u2713 ocp4_workload_showroom_namespace not set (correct for tenant catalog)",
+          "\u2713 No showroom namespace entry in tenant namespaces (correct)",
+          "\u2713 Workload format correct (5 workloads)",
+          "\u2713 tag variable defined: main",
+          "\u2713 Collection uses tag pattern: namespaced_workloads",
+          "\u2713 Collection uses tag pattern: core_workloads",
+          "\u2713 Collections defined (3 collections)",
+          "\u2713 LiteMaaS not in use (no includes required)",
+          "\u2713 No duplicate includes across files",
+          "\u2713 No duplicate includes within common.yaml",
+          "\u2713 requirements_content at line 37 (within first 200 lines)",
+          "\u2713 ocp4_workload_litellm_virtual_keys not present (no placement check needed)",
+          "\u2713 Showroom workload in correct CI type (tenant/dedicated/VM)",
+          "\u2713 sandboxes block present",
+          "\u2713 sandboxes[0].kind: OcpSandbox",
+          "\u2713 cloud_selector.cloud: cnv-dedicated-shared",
+          "\u2713 cloud_selector.lab set: my-lab-name",
+          "\u2713 sandbox_api.actions.destroy.catch_all: false",
+          "\u2713 namespaced_workloads collection present",
+          "\u2713 ocp4_workload_tenant_keycloak_user in workloads",
+          "\u2713 ocp4_workload_tenant_namespace in workloads",
+          "\u2713 tenant username vars consistent",
+          "\u2713 remove_workloads defined",
+          "\u2713 remove_workloads includes ocp4_workload_tenant_namespace",
+          "\u2713 remove_workloads includes ocp4_workload_tenant_keycloak_user"
+        ],
+        "summary": "2 errors, 7 warnings, 0 suggestions, 37 checks passed"
+      }
+    }
+  ],
+  "note": "Sample run record. Local absolute paths redacted to <repo>. Real records are written to outputs/ (gitignored)."
+}

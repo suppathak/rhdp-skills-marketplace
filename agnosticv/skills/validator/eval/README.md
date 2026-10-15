@@ -418,6 +418,9 @@ run that is killed or times out leaves no record. Stdout stays a lean summary; t
 forensic record, which makes "why did this fixture fail?" answerable after the
 fact and enables score-over-time tracking.
 
+A committed example of what a record looks like (local paths redacted):
+[`samples/eval-sample-missing-uuid.json`](samples/eval-sample-missing-uuid.json).
+
 ## Adding a fixture
 
 1. Create `fixtures/broken/<name>/`
